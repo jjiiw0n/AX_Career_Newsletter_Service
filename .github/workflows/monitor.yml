@@ -35,3 +35,6 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          # Keep recruitment scraping and weekly job emails disabled until
+          # explicitly re-enabled.
+          JOB_MONITORING_ENABLED: 'false'

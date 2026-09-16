@@ -506,6 +506,10 @@ async function sendEmail(to, userName, userResults) {
 async function monitor() {
     console.log('Starting Service Monitor...');
 
+    // Recruitment monitoring stays opt-in at the deployment level. Keep this
+    // false in GitHub Actions until the user explicitly asks to resume it.
+    const jobMonitoringEnabled = process.env.JOB_MONITORING_ENABLED === 'true';
+
     // 1. Fetch Subscribers & Sites
     const { data: subscribers, error: subError } = await supabase
         .from('subscribers')
@@ -576,7 +580,7 @@ async function monitor() {
     }
 
     // 3. Recruitment sites are collected and mailed once a week on Monday.
-    if (isMonday) {
+    if (jobMonitoringEnabled && isMonday) {
         console.log('Monday detected. Starting site scraping...');
 
         // --- Static/Regex Sites ---
@@ -679,12 +683,14 @@ async function monitor() {
             await page.close();
         } catch (e) { console.error('KoreaAero scrape failed'); }
 
+    } else if (!jobMonitoringEnabled) {
+        console.log('Recruitment monitoring is disabled. Skipping site scraping.');
     } else {
         console.log('Not Monday. Skipping site scraping.');
     }
 
     // 4. Build and send each subscriber's weekly recruitment digest.
-    if (isMonday) {
+    if (jobMonitoringEnabled && isMonday) {
         for (const subscriber of subscribers) {
             console.log(`Processing weekly jobs for: ${subscriber.email}`);
             const userResults = {};
