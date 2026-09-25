@@ -40,7 +40,7 @@ function selectDongAScienceArticles(candidates, limit = 3) {
 
 async function scrapeNews(context) {
     console.log('Starting Newsletter Scraping...');
-    const results = { science: [], ai: [], defense: [] };
+    const results = { science: [], ai: [], defense: [], knowledge: [] };
     const priorityKeywords = {
         science: [],
         ai: ['ETRI', 'KT', 'SKT', 'LG'],
@@ -83,6 +83,20 @@ async function scrapeNews(context) {
         await defPage.close();
     } catch (e) {
         console.error('Daily Defense scrape failed:', e.message);
+    }
+
+    try {
+        const knowledgePage = await context.newPage();
+        await knowledgePage.goto('https://www.solnews.co.kr/news/articleList.html?sc_section_code=S1N8&view_type=sm', { waitUntil: 'domcontentloaded' });
+        results.knowledge = await knowledgePage.evaluate(() => Array.from(
+            document.querySelectorAll('#section-list .view-cont h2.titles a')
+        ).map(a => ({
+            title: a.innerText.replace(/\s+/g, ' ').trim(),
+            link: a.href
+        })).filter(article => article.title && article.link));
+        await knowledgePage.close();
+    } catch (e) {
+        console.error('Solution News knowledge scrape failed:', e.message);
     }
 
     const totalArticles = Object.values(results).reduce((sum, articles) => sum + articles.length, 0);
@@ -141,7 +155,7 @@ function selectLatestDeliveryRows(rows) {
 async function filterRecentlySentNewsletter(newsData) {
     const { data, error } = await supabase.from('newsletter_history')
         .select('article_title, article_link, delivery_id, sent_at')
-        .in('source', ['science', 'ai', 'defense'])
+        .in('source', ['science', 'ai', 'defense', 'knowledge'])
         .order('sent_at', { ascending: false })
         .limit(100);
     if (error) throw new Error(`Failed to load newsletter history: ${error.message}`);
@@ -226,6 +240,45 @@ async function filterUnsentBlogPosts(posts, limit = 1) {
     return posts.filter(post => !sentLinks.has(normalizeArticleLink(post.link))).slice(0, limit);
 }
 
+function extractXmlAttribute(xml, tag, attribute) {
+    const match = (xml || '').match(new RegExp(`<${tag}\\b[^>]*\\b${attribute}=["']([^"']+)["'][^>]*>`, 'i'));
+    return decodeXmlText(match?.[1] || '');
+}
+
+function parseYouTubeFeed(xml, limit = 10) {
+    return Array.from(xml.matchAll(/<entry>([\s\S]*?)<\/entry>/gi))
+        .map(([, entryXml]) => {
+            const videoId = extractRssField(entryXml, 'yt:videoId');
+            const feedLink = extractXmlAttribute(entryXml, 'link', 'href');
+            const link = normalizeArticleLink(feedLink || (videoId ? `https://www.youtube.com/watch?v=${videoId}` : ''));
+            return {
+                title: normalizeYouTubeTitle(extractRssField(entryXml, 'title')),
+                link,
+                imageUrl: extractXmlAttribute(entryXml, 'media:thumbnail', 'url') || (videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : ''),
+                publishedAt: extractRssField(entryXml, 'published')
+            };
+        })
+        .filter(video => video.title && video.link && !video.link.includes('/shorts/'))
+        .slice(0, limit);
+}
+
+async function scrapeYouTubeChannel() {
+    const response = await fetch('https://www.youtube.com/feeds/videos.xml?channel_id=UCVNAlg66t3JhkzT5JntclLg', {
+        headers: { 'User-Agent': 'Career-Newsletter-Service/1.0' }
+    });
+    if (!response.ok) throw new Error(`YouTube feed returned HTTP ${response.status}`);
+    return parseYouTubeFeed(await response.text());
+}
+
+async function filterUnsentYouTubeVideos(videos, limit = 1) {
+    const { data, error } = await supabase.from('newsletter_history')
+        .select('article_link')
+        .eq('source', 'youtube_charlesmililab');
+    if (error) throw new Error(`Failed to load YouTube history: ${error.message}`);
+    const sentLinks = new Set((data || []).map(row => normalizeArticleLink(row.article_link)));
+    return videos.filter(video => !sentLinks.has(normalizeArticleLink(video.link))).slice(0, limit);
+}
+
 function escapeNewsletterHtml(value) {
     return String(value || '')
         .replace(/&/g, '&amp;')
@@ -233,6 +286,14 @@ function escapeNewsletterHtml(value) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+}
+
+function normalizeYouTubeTitle(title) {
+    return String(title || '').split('#', 1)[0].trim();
+}
+
+function formatYouTubeTitle(title) {
+    return escapeNewsletterHtml(normalizeYouTubeTitle(title));
 }
 
 function formatBlogDate(value) {
@@ -245,8 +306,14 @@ function formatBlogDate(value) {
 
 async function sendNewsletter(to, userName, newsData, insight, blogPosts = [], options = {}) {
     const today = new Date().toLocaleDateString('ko-KR');
+    const youtubeVideos = options.youtubeVideos || [];
     let newsletterHtml = '';
-    const categories = [{ key: 'science', name: '과학' }, { key: 'ai', name: 'AI/네트워크' }, { key: 'defense', name: '방산/국방' }];
+    const categories = [
+        { key: 'science', name: '과학' },
+        { key: 'ai', name: 'AI/네트워크' },
+        { key: 'defense', name: '방산/국방' },
+        { key: 'knowledge', name: '지식' }
+    ];
 
     categories.forEach(cat => {
         const articles = newsData[cat.key] || [];
@@ -275,6 +342,22 @@ async function sendNewsletter(to, userName, newsData, insight, blogPosts = [], o
         </div>`;
     }
 
+    let youtubeHtml = '';
+    if (youtubeVideos.length > 0) {
+        youtubeHtml = `<hr style="border:0; border-top:1px solid #e7d8d1; margin:34px 0 26px;">
+        <div style="margin-top:0;">
+            <p style="margin:0 0 6px; color:#c95f52; font-size:13px; font-weight:bold; letter-spacing:0.04em;">샤를의 군사연구소 새 영상</p>
+            <h3 style="margin:0 0 18px; color:#4b332b; font-size:21px;">▶️ 밀리터리 유튜브 업데이트</h3>
+            ${youtubeVideos.map(video => `<div style="overflow:hidden; width:100%; max-width:100%; box-sizing:border-box; background:#fffaf7; border:1px solid #f0ddd5; border-radius:12px; margin-top:12px;">
+                ${video.imageUrl ? `<a href="${escapeNewsletterHtml(video.link)}" style="display:block; width:100%; max-width:100%; text-decoration:none;"><img src="${escapeNewsletterHtml(video.imageUrl)}" alt="${escapeNewsletterHtml(video.title)}" style="display:block; width:100%; max-width:100%; height:auto; border:0;"></a>` : ''}
+                <div style="min-width:0; max-width:100%; box-sizing:border-box; padding:18px 20px 20px;">
+                    ${formatBlogDate(video.publishedAt) ? `<p style="margin:0 0 7px; color:#8c746b; font-size:12px;">${formatBlogDate(video.publishedAt)}</p>` : ''}
+                    <a href="${escapeNewsletterHtml(video.link)}" style="display:block; max-width:100%; color:#33231e; font-size:18px; font-weight:bold; line-height:1.55; word-break:keep-all; overflow-wrap:anywhere; text-decoration:none;">${formatYouTubeTitle(video.title)}</a>
+                </div>
+            </div>`).join('')}
+        </div>`;
+    }
+
     let html = `
     <div style="font-family: 'Malgun Gothic', sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; border: 1px solid #eee; color: #333;">
         <h1 style="color: #1a73e8; text-align: center; border-bottom: 2px solid #1a73e8; padding-bottom: 15px;">🚀 ${userName}님을 위한 데일리 뉴스레터</h1>
@@ -284,6 +367,7 @@ async function sendNewsletter(to, userName, newsData, insight, blogPosts = [], o
              <p style="background-color: #f8f9fa; padding: 15px; border-left: 5px solid #1a73e8; font-style: italic; font-size: 1.1em;">"${insight}"</p>
             ${newsletterHtml}
             ${blogHtml}
+            ${youtubeHtml}
         </div>
         <p style="margin-top: 40px; font-size: 12px; color: #999; text-align: center;">발송 시각: ${new Date().toLocaleString('ko-KR')}</p>
     </div>
@@ -565,15 +649,21 @@ async function monitor() {
         } catch (blogError) {
             console.error('Naver Blog scrape failed:', blogError.message);
         }
+        let youtubeVideos = [];
+        try {
+            youtubeVideos = await filterUnsentYouTubeVideos(await scrapeYouTubeChannel());
+        } catch (youtubeError) {
+            console.error('YouTube scrape failed:', youtubeError.message);
+        }
         const insight = '오늘의 과학·AI·방산 분야 주요 소식을 전해드립니다.';
-        if (articleCount === 0 && blogPosts.length === 0) {
-            console.log('No unsent newsletter articles or blog posts found. Skipping daily newsletter.');
+        if (articleCount === 0 && blogPosts.length === 0 && youtubeVideos.length === 0) {
+            console.log('No unsent newsletter articles, blog posts, or YouTube videos found. Skipping daily newsletter.');
         } else {
             for (const subscriber of subscribers.filter(subscriber => subscriber.daily_enabled !== false)) {
-                await sendNewsletter(subscriber.email, subscriber.user_name || '회원', newsData, insight, blogPosts);
+                await sendNewsletter(subscriber.email, subscriber.user_name || '회원', newsData, insight, blogPosts, { youtubeVideos });
                 console.log(`Daily newsletter sent to ${subscriber.email}`);
             }
-            await saveNewsletterHistory({ ...newsData, naver_blog_rgm84d: blogPosts });
+            await saveNewsletterHistory({ ...newsData, naver_blog_rgm84d: blogPosts, youtube_charlesmililab: youtubeVideos });
         }
     } catch (error) {
         console.error('Daily newsletter failed:', error);
@@ -775,6 +865,12 @@ module.exports = {
     parseNaverBlogRss,
     scrapeNaverBlog,
     filterUnsentBlogPosts,
+    extractXmlAttribute,
+    parseYouTubeFeed,
+    scrapeYouTubeChannel,
+    filterUnsentYouTubeVideos,
+    normalizeYouTubeTitle,
+    formatYouTubeTitle,
     sendNewsletter,
     normalizeLink,
     parseEtri,

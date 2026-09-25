@@ -39,3 +39,29 @@ test('excludes recent URLs and titles, then fills from the next rank', () => {
         { title: '새 기사 3', link: 'https://example.com/5' }
     ] });
 });
+
+test('keeps knowledge as a separate category and fills three new articles', () => {
+    const newsData = {
+        science: [{ title: '과학 기사', link: 'https://example.com/science' }],
+        knowledge: [
+            { title: '어제 보낸 지식', link: 'https://www.solnews.co.kr/news/articleView.html?idxno=1' },
+            { title: '새 지식 1', link: 'https://www.solnews.co.kr/news/articleView.html?idxno=2' },
+            { title: '새 지식 2', link: 'https://www.solnews.co.kr/news/articleView.html?idxno=3' },
+            { title: '새 지식 3', link: 'https://www.solnews.co.kr/news/articleView.html?idxno=4' },
+            { title: '새 지식 4', link: 'https://www.solnews.co.kr/news/articleView.html?idxno=5' }
+        ]
+    };
+    const sentRows = [{
+        article_title: '어제 보낸 지식',
+        article_link: 'https://www.solnews.co.kr/news/articleView.html?idxno=1',
+    }];
+
+    assert.deepEqual(excludeRecentlySentArticles(newsData, sentRows), {
+        science: [{ title: '과학 기사', link: 'https://example.com/science' }],
+        knowledge: [
+            { title: '새 지식 1', link: 'https://www.solnews.co.kr/news/articleView.html?idxno=2' },
+            { title: '새 지식 2', link: 'https://www.solnews.co.kr/news/articleView.html?idxno=3' },
+            { title: '새 지식 3', link: 'https://www.solnews.co.kr/news/articleView.html?idxno=4' }
+        ]
+    });
+});
