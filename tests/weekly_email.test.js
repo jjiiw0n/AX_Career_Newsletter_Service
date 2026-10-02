@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { generateHtml } = require('../monitor_v2');
+const { generateHtml, parseEtri, parseCsvSet, getJobSource, selectJobSubscribers } = require('../monitor_v2');
 
 test('weekly email summarizes only the subscriber selected sites', () => {
     const userResults = {
@@ -39,4 +39,40 @@ test('weekly email escapes scraped content', () => {
     assert.match(html, /&lt;script&gt;/);
     assert.match(html, /&lt;관리자&gt;/);
     assert.match(html, /a=1&amp;b=2/);
+});
+
+test('enables only ETRI for the selected weekly recipient', () => {
+    const subscribers = [
+        {
+            email: 'jeew0n.lee.217@gmail.com',
+            monitoring_sites: [
+                { site_name: 'ETRI 인턴 공고', url: 'https://www.etri.re.kr/kor/bbs/list.etri?b_board_id=ETRI39' },
+                { site_name: 'KAI 신입', url: 'https://koreaaero.recruiter.co.kr/career/job' }
+            ]
+        },
+        { email: 'cdy3976@gmail.com', monitoring_sites: [] }
+    ];
+
+    const selected = selectJobSubscribers(
+        subscribers,
+        parseCsvSet('etri'),
+        parseCsvSet('jeew0n.lee.217@gmail.com')
+    );
+
+    assert.equal(selected.length, 1);
+    assert.equal(selected[0].email, 'jeew0n.lee.217@gmail.com');
+    assert.deepEqual(selected[0].monitoring_sites.map(site => getJobSource(site.url)), ['etri']);
+});
+
+test('ETRI parser keeps only internship postings and decodes the link', () => {
+    const html = `<table><tbody>
+        <tr><td><a href="/kor/bbs/view.etri?b_board_id=ETRI39&amp;b_idx=10">정규직 공개채용</a></td><td>2026-10-01</td></tr>
+        <tr><td><a href="/kor/bbs/view.etri?b_board_id=ETRI39&amp;b_idx=11">연구연수생 인턴 공개채용</a></td><td>2026-10-02</td></tr>
+    </tbody></table>`;
+
+    assert.deepEqual(parseEtri(html), [{
+        title: '연구연수생 인턴 공개채용',
+        link: 'https://www.etri.re.kr/kor/bbs/view.etri?b_board_id=ETRI39&b_idx=11',
+        date: '2026-10-02'
+    }]);
 });
