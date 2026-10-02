@@ -412,9 +412,11 @@ function parseEtri(html) {
                 const linkMatch = row.match(/href="([^"]*?)"/);
                 const dateMatch = row.match(/\d{4}-\d{2}-\d{2}/);
                 if (titleMatch && linkMatch) {
+                    const title = titleMatch[1].replace(/<[^>]*>?/gm, '').trim();
+                    if (!title.includes('인턴')) return;
                     posts.push({
-                        title: titleMatch[1].replace(/<[^>]*>?/gm, '').trim(),
-                        link: 'https://www.etri.re.kr' + linkMatch[1],
+                        title,
+                        link: 'https://www.etri.re.kr' + linkMatch[1].replace(/&amp;/g, '&'),
                         date: dateMatch ? dateMatch[0] : 'N/A'
                     });
                 }
@@ -483,6 +485,43 @@ function escapeHtml(value) {
         .replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;')
         .replaceAll("'", '&#039;');
+}
+
+function parseCsvSet(value) {
+    return new Set(String(value || '').split(',').map(item => item.trim().toLowerCase()).filter(Boolean));
+}
+
+function getJobSource(url) {
+    const value = String(url || '').toLowerCase();
+    if (value.includes('etri.re.kr')) return 'etri';
+    if (value.includes('btp.or.kr')) return 'btp';
+    if (value.includes('2030db.go.kr')) return 'youth';
+    if (value.includes('ligdna.recruiter.co.kr')) return 'lig';
+    if (value.includes('hanwhain.com')) return 'hanwha';
+    if (value.includes('koreaaero.recruiter.co.kr')) return 'kai';
+    return '';
+}
+
+function selectJobSubscribers(subscribers, enabledSources, enabledRecipients) {
+    return subscribers
+        .filter(subscriber => enabledRecipients.size === 0 || enabledRecipients.has(String(subscriber.email).toLowerCase()))
+        .map(subscriber => ({
+            ...subscriber,
+            monitoring_sites: (subscriber.monitoring_sites || []).filter(site => enabledSources.has(getJobSource(site.url)))
+        }));
+}
+
+async function ensureEtriSite(subscriber) {
+    const existing = (subscriber.monitoring_sites || []).find(site => getJobSource(site.url) === 'etri');
+    if (existing) return existing;
+
+    const { data, error } = await supabase.from('monitoring_sites').insert({
+        subscriber_id: subscriber.id,
+        site_name: 'ETRI 인턴 공고',
+        url: 'https://www.etri.re.kr/kor/bbs/list.etri?b_board_id=ETRI39'
+    }).select('*').single();
+    if (error) throw new Error(`Failed to restore ETRI monitoring site for ${subscriber.email}: ${error.message}`);
+    return data;
 }
 
 function generateHtml(userResults, userName) {
@@ -590,9 +629,9 @@ async function sendEmail(to, userName, userResults) {
 async function monitor() {
     console.log('Starting Service Monitor...');
 
-    // Recruitment monitoring stays opt-in at the deployment level. Keep this
-    // false in GitHub Actions until the user explicitly asks to resume it.
     const jobMonitoringEnabled = process.env.JOB_MONITORING_ENABLED === 'true';
+    const enabledJobSources = parseCsvSet(process.env.JOB_MONITORING_SOURCES);
+    const enabledJobRecipients = parseCsvSet(process.env.JOB_MONITORING_RECIPIENTS);
 
     // 1. Fetch Subscribers & Sites
     const { data: subscribers, error: subError } = await supabase
@@ -633,6 +672,18 @@ async function monitor() {
         timeZone: 'Asia/Seoul',
         weekday: 'short'
     }).format(new Date()) === 'Mon';
+    let jobSubscribers = [];
+    if (jobMonitoringEnabled && isMonday) {
+        jobSubscribers = selectJobSubscribers(subscribers, enabledJobSources, enabledJobRecipients);
+        if (enabledJobSources.has('etri')) {
+            for (const subscriber of jobSubscribers) {
+                if (!subscriber.monitoring_sites.some(site => getJobSource(site.url) === 'etri')) {
+                    subscriber.monitoring_sites.push(await ensureEtriSite(subscriber));
+                }
+            }
+        }
+        jobSubscribers = jobSubscribers.filter(subscriber => subscriber.monitoring_sites.length > 0);
+    }
     let dataCache = {};
     let htmlCache = {};
     const browser = await chromium.launch({ headless: true });
@@ -674,8 +725,8 @@ async function monitor() {
         console.log('Monday detected. Starting site scraping...');
 
         // --- Static/Regex Sites ---
-        // Scrape ETRI
-        try {
+        // Scrape only explicitly enabled sources. ETRI is currently the sole source.
+        if (enabledJobSources.has('etri')) try {
             const page = await context.newPage();
             await page.setExtraHTTPHeaders({ 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' });
             await page.goto('https://www.etri.re.kr/kor/bbs/list.etri?b_board_id=ETRI39', { waitUntil: 'domcontentloaded' });
@@ -684,7 +735,7 @@ async function monitor() {
         } catch (e) { console.error('ETRI scrape failed'); }
 
         // Scrape BTP
-        try {
+        if (enabledJobSources.has('btp')) try {
             const page = await context.newPage();
             await page.setExtraHTTPHeaders({ 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' });
             await page.goto('https://www.btp.or.kr/index.php?pCode=MN2000192', { waitUntil: 'domcontentloaded' });
@@ -693,7 +744,7 @@ async function monitor() {
         } catch (e) { console.error('BTP scrape failed'); }
 
         // Scrape Youth
-        try {
+        if (enabledJobSources.has('youth')) try {
             const page = await context.newPage();
             await page.setExtraHTTPHeaders({ 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' });
             await page.goto('https://www.2030db.go.kr/user/youthIntern/selectYouthInternList.do', { waitUntil: 'domcontentloaded' });
@@ -703,7 +754,7 @@ async function monitor() {
 
         // --- Dynamic/Evaluate Sites ---
         // Scrape Lig
-        try {
+        if (enabledJobSources.has('lig')) try {
             const page = await context.newPage();
             await page.setExtraHTTPHeaders({ 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' });
             await page.goto('https://ligdna.recruiter.co.kr/app/jobnotice/list', { waitUntil: 'domcontentloaded' });
@@ -726,7 +777,7 @@ async function monitor() {
         } catch (e) { console.error('Lig scrape failed'); }
 
         // Scrape Hanwha
-        try {
+        if (enabledJobSources.has('hanwha')) try {
             const page = await context.newPage();
             await page.setExtraHTTPHeaders({ 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' });
             await page.goto('https://www.hanwhain.com/portal/apply/recruit', { waitUntil: 'domcontentloaded' });
@@ -747,7 +798,7 @@ async function monitor() {
         } catch (e) { console.error('Hanwha scrape failed'); }
 
         // Scrape KoreaAero
-        try {
+        if (enabledJobSources.has('kai')) try {
             const page = await context.newPage();
             await page.setExtraHTTPHeaders({ 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' });
             await page.goto('https://koreaaero.recruiter.co.kr/career/job', { waitUntil: 'domcontentloaded' });
@@ -781,7 +832,7 @@ async function monitor() {
 
     // 4. Build and send each subscriber's weekly recruitment digest.
     if (jobMonitoringEnabled && isMonday) {
-        for (const subscriber of subscribers) {
+        for (const subscriber of jobSubscribers) {
             console.log(`Processing weekly jobs for: ${subscriber.email}`);
             const userResults = {};
 
@@ -876,5 +927,8 @@ module.exports = {
     parseEtri,
     parseBtp,
     parseYouth,
+    parseCsvSet,
+    getJobSource,
+    selectJobSubscribers,
     generateHtml
 };
