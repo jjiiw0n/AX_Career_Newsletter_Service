@@ -43,7 +43,7 @@ async function scrapeNews(context) {
     const results = { science: [], ai: [], defense: [], knowledge: [] };
     const priorityKeywords = {
         science: [],
-        ai: ['ETRI', 'KT', 'SKT', 'LG'],
+        ai: [],
         defense: ['LIG', '한화', 'KAI', '현대']
     };
 
