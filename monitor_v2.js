@@ -3,6 +3,7 @@ const { randomUUID } = require('node:crypto');
 const { chromium } = require('playwright');
 const nodemailer = require('nodemailer');
 const supabase = require('./lib/supabase');
+const { SOURCES: WEEKLY_SOURCES, collectSource } = require('./lib/weekly_sources');
 
 // --- Helpers & Parsers ---
 // ... (existing helper functions: normalizeLink, parseEtri, parseBtp, parseYouth)
@@ -496,6 +497,8 @@ function getJobSource(url) {
     if (value.includes('etri.re.kr')) return 'etri';
     if (value.includes('btp.or.kr')) return 'btp';
     if (value.includes('2030db.go.kr')) return 'youth';
+    if (value.includes('yw.work24.go.kr')) return 'experience';
+    if (value.includes('krivet.re.kr')) return 'knda';
     if (value.includes('ligdna.recruiter.co.kr')) return 'lig';
     if (value.includes('hanwhain.com')) return 'hanwha';
     if (value.includes('koreaaero.recruiter.co.kr')) return 'kai';
@@ -524,35 +527,46 @@ async function ensureEtriSite(subscriber) {
     return data;
 }
 
+async function ensureWeeklySites(subscriber, sources) {
+    for (const source of sources) {
+        const config = WEEKLY_SOURCES[source];
+        if (!config || subscriber.monitoring_sites.some(site => getJobSource(site.url) === source)) continue;
+        const { data, error } = await supabase.from('monitoring_sites').insert({
+            subscriber_id: subscriber.id, ...config
+        }).select('*').single();
+        if (error) throw error;
+        subscriber.monitoring_sites.push(data);
+    }
+}
+
 function generateHtml(userResults, userName) {
     const siteEntries = Object.entries(userResults);
     const totalNew = siteEntries.reduce((sum, [, posts]) => sum + posts.length, 0);
     const safeUserName = escapeHtml(userName);
     const siteSummary = siteEntries
         .map(([siteName, posts]) => `
-            <span style="display:inline-block; margin:0 6px 8px 0; padding:7px 11px; border:1px solid #eadbd5; border-radius:999px; background:#ffffff; color:#55372f; font-size:12px; font-weight:600;">
+            <div style="margin:0 0 6px; color:#765f57; font-size:14px; line-height:1.7; word-break:keep-all; overflow-wrap:anywhere;">
                 ${escapeHtml(siteName)} · ${posts.length > 0 ? `신규 ${posts.length}건` : '확인 완료'}
-            </span>
+            </div>
         `)
         .join('');
 
     let html = `
-    <div style="margin:0; padding:24px 12px; background:#fffaf7; font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif; color:#33231f;">
-      <div style="max-width:720px; margin:0 auto; overflow:hidden; border:1px solid #eadbd5; border-radius:18px; background:#ffffff;">
-        <div style="padding:30px 28px 24px; border-bottom:1px solid #eadbd5; background:#ffffff;">
-          <div style="margin-bottom:18px; font-size:16px; font-weight:700; color:#55372f;">시그널 주간 채용 공고</div>
-          <div style="display:inline-block; margin-bottom:12px; padding:5px 9px; border-radius:999px; background:#ffe3de; color:#9f3f36; font-size:11px; font-weight:700;">매주 월요일 업데이트</div>
-          <h1 style="margin:0; color:#33231f; font-size:25px; line-height:1.4; letter-spacing:-0.5px;">${safeUserName}님이 선택한 채용 사이트를 확인했습니다</h1>
+    <div style="max-width:800px; box-sizing:border-box; margin:0 auto; padding:20px; border:1px solid #eee; background:#ffffff; font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif; font-size:16px; line-height:1.7; color:#333; word-break:keep-all; overflow-wrap:anywhere;">
+      <div>
+        <div>
+          <h1 style="margin:0; padding-bottom:15px; border-bottom:2px solid #f36f61; color:#c65348; text-align:center; font-size:28px; line-height:1.4;">🚀 ${safeUserName}님을 위한 주간 채용 공고</h1>
+          <p style="margin:16px 0 0; color:#765f57; font-size:14px;">매주 월요일 업데이트</p>
           <p style="margin:10px 0 0; color:#765f57; font-size:14px; line-height:1.7;">
             이번 주에는 관심 사이트 ${siteEntries.length}곳을 확인했고, 신규 공고는 <strong style="color:#f36f61;">${totalNew}건</strong>입니다.
             선택하지 않은 사이트의 공고는 포함하지 않았습니다.
           </p>
         </div>
-        <div style="padding:20px 28px 12px; background:#f8eee9;">
+        <div style="margin-top:24px; padding:15px; background:#f8f9fa; border-left:5px solid #f36f61;">
           <div style="margin-bottom:9px; color:#765f57; font-size:12px; font-weight:700;">이번 주 확인한 사이트</div>
           <div>${siteSummary}</div>
         </div>
-        <div style="padding:8px 28px 28px;">
+        <div style="margin-top:30px; padding:16px; background:#fcfcfc; border:1px dashed #f36f61; border-radius:10px;">
     `;
 
     siteEntries.forEach(([siteName, posts]) => {
@@ -560,14 +574,12 @@ function generateHtml(userResults, userName) {
         const statusText = hasNew ? `신규 ${posts.length}건` : '신규 공고 없음';
 
         html += `
-        <div style="margin-top:20px; overflow:hidden; border:1px solid ${hasNew ? '#f5b2a8' : '#eadbd5'}; border-radius:14px; background:#ffffff;">
-          <div style="padding:15px 18px; border-bottom:1px solid #eadbd5; background:${hasNew ? '#fff0ed' : '#f7f1ee'};">
-            <table role="presentation" style="width:100%; border-collapse:collapse;"><tr>
-              <td style="color:#55372f; font-size:15px; font-weight:700;">${escapeHtml(siteName)}</td>
-              <td style="text-align:right;"><span style="display:inline-block; padding:4px 8px; border-radius:999px; background:${hasNew ? '#f36f61' : '#ffffff'}; color:${hasNew ? '#ffffff' : '#765f57'}; font-size:11px; font-weight:700;">${statusText}</span></td>
-            </tr></table>
+        <div style="margin-top:24px;">
+          <div style="padding-top:20px; border-top:1px solid #ddd;">
+            <h3 style="margin:0 0 6px; color:#c65348; font-size:20px; line-height:1.55;">📌 ${escapeHtml(siteName)}</h3>
+            <p style="margin:0; color:#765f57; font-size:14px;">${statusText}</p>
           </div>
-          <div style="padding:4px 18px;">
+          <div>
         `;
 
         if (posts.length === 0) {
@@ -576,8 +588,9 @@ function generateHtml(userResults, userName) {
             posts.forEach(post => {
                 html += `
                   <div style="padding:16px 0; border-bottom:1px solid #f0e5e0;">
-                    <a href="${escapeHtml(post.link)}" style="color:#33231f; font-size:14px; font-weight:700; line-height:1.55; text-decoration:none;">${escapeHtml(post.title)}</a>
-                    <div style="margin-top:7px; color:#8b756d; font-size:12px;">${escapeHtml(post.date || post.period || '일정 확인 필요')} · <a href="${escapeHtml(post.link)}" style="color:#c65348; font-weight:700; text-decoration:none;">공고 보기 →</a></div>
+                    <a href="${escapeHtml(post.link)}" style="display:block; color:#333; font-size:16px; font-weight:700; line-height:1.7; word-break:keep-all; overflow-wrap:anywhere; text-decoration:none;">${escapeHtml(post.title)}</a>
+                    <p style="margin:7px 0 0; color:#8b756d; font-size:14px; line-height:1.7;">${escapeHtml(post.date || post.period || '일정 확인 필요')}</p>
+                    <a href="${escapeHtml(post.link)}" style="display:block; margin-top:5px; color:#c65348; font-size:14px; font-weight:700; text-decoration:none;">공고 보기 →</a>
                   </div>`;
             });
         }
@@ -587,7 +600,7 @@ function generateHtml(userResults, userName) {
 
     html += `
         </div>
-        <div style="padding:22px 28px; border-top:1px solid #eadbd5; background:#fffaf7; color:#8b756d; font-size:11px; line-height:1.7; text-align:center;">
+        <div style="margin-top:40px; color:#999; font-size:12px; line-height:1.7; text-align:center;">
           이 메일은 직접 선택한 채용 사이트만 확인해 자동 발송했습니다.<br>
           발송 시각: ${new Date().toLocaleString('ko-KR')}
         </div>
@@ -675,13 +688,7 @@ async function monitor() {
     let jobSubscribers = [];
     if (jobMonitoringEnabled && isMonday) {
         jobSubscribers = selectJobSubscribers(subscribers, enabledJobSources, enabledJobRecipients);
-        if (enabledJobSources.has('etri')) {
-            for (const subscriber of jobSubscribers) {
-                if (!subscriber.monitoring_sites.some(site => getJobSource(site.url) === 'etri')) {
-                    subscriber.monitoring_sites.push(await ensureEtriSite(subscriber));
-                }
-            }
-        }
+        for (const subscriber of jobSubscribers) await ensureWeeklySites(subscriber, enabledJobSources);
         jobSubscribers = jobSubscribers.filter(subscriber => subscriber.monitoring_sites.length > 0);
     }
     let dataCache = {};
@@ -743,14 +750,11 @@ async function monitor() {
             await page.close();
         } catch (e) { console.error('BTP scrape failed'); }
 
-        // Scrape Youth
-        if (enabledJobSources.has('youth')) try {
-            const page = await context.newPage();
-            await page.setExtraHTTPHeaders({ 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' });
-            await page.goto('https://www.2030db.go.kr/user/youthIntern/selectYouthInternList.do', { waitUntil: 'domcontentloaded' });
-            htmlCache['youth'] = await page.content();
-            await page.close();
-        } catch (e) { console.error('Youth scrape failed'); }
+        // A failed collection must not become a misleading "no new postings" email.
+        for (const source of ['youth', 'experience', 'knda']) {
+            if (enabledJobSources.has(source)) dataCache[source] = await collectSource(source);
+        }
+        if (enabledJobSources.has('etri') && !htmlCache.etri) throw new Error('ETRI collection failed');
 
         // --- Dynamic/Evaluate Sites ---
         // Scrape Lig
@@ -842,8 +846,8 @@ async function monitor() {
                     posts = parseEtri(htmlCache.etri);
                 } else if (site.url.includes('btp.or.kr') && htmlCache.btp) {
                     posts = parseBtp(htmlCache.btp);
-                } else if (site.url.includes('2030db.go.kr') && htmlCache.youth) {
-                    posts = parseYouth(htmlCache.youth);
+                } else if (['youth', 'experience', 'knda'].includes(getJobSource(site.url))) {
+                    posts = dataCache[getJobSource(site.url)] || [];
                 } else if (site.url.includes('ligdna.recruiter.co.kr')) {
                     posts = dataCache.lig_data || [];
                 } else if (site.url.includes('hanwhain.com')) {
@@ -854,7 +858,7 @@ async function monitor() {
 
                 const newPosts = [];
                 for (const post of posts) {
-                    const normalizedLink = normalizeLink(post.link);
+                    const normalizedLink = post.historyKey || normalizeLink(post.link);
                     const { data: existing, error: historyError } = await supabase
                         .from('crawl_history')
                         .select('id')
@@ -864,7 +868,7 @@ async function monitor() {
                     if (historyError) throw historyError;
 
                     if (!existing) {
-                        newPosts.push({ ...post, link: normalizedLink });
+                        newPosts.push({ ...post, historyKey: normalizedLink });
                     }
                 }
                 userResults[site.site_name] = newPosts;
@@ -879,7 +883,7 @@ async function monitor() {
                         const { error: insertError } = await supabase.from('crawl_history').insert({
                             site_id: site.id,
                             job_title: post.title.trim(),
-                            job_link: post.link
+                            job_link: post.historyKey
                         });
                         if (insertError && insertError.code !== '23505') throw insertError;
                     }
