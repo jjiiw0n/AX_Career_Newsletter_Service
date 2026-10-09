@@ -41,6 +41,20 @@ test('weekly email escapes scraped content', () => {
     assert.match(html, /a=1&amp;b=2/);
 });
 
+test('weekly email uses a simple coral newsletter layout without pill badges', () => {
+    const { html } = generateHtml({
+        '긴 이름의 기업 교육 및 일경험 프로그램': [{
+            title: '한국어 제목이 길어도 모바일에서 자연스럽게 줄바꿈되는 공고',
+            link: 'https://example.com/jobs/1',
+            period: '2026-10-09 ~ 2026-10-19'
+        }]
+    }, '이지원');
+    assert.match(html, /#f36f61/);
+    assert.match(html, /border-left:5px/);
+    assert.match(html, /overflow-wrap:anywhere/);
+    assert.doesNotMatch(html, /border-radius:999px|<table|#1a73e8/);
+});
+
 test('enables only ETRI for the selected weekly recipient', () => {
     const subscribers = [
         {

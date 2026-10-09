@@ -27,6 +27,12 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 
+      - name: Test service
+        run: npm test
+        env:
+          SUPABASE_URL: https://example.supabase.co
+          SUPABASE_ANON_KEY: test-key
+
       - name: Run Monitor Service
         run: node monitor_v2.js
         env:
@@ -35,7 +41,7 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
-          # Weekly recruitment digest: ETRI only. Other job sources remain off.
+          # Daily newsletter remains daily; recruitment digest is Monday-only in KST.
           JOB_MONITORING_ENABLED: 'true'
-          JOB_MONITORING_SOURCES: 'etri'
+          JOB_MONITORING_SOURCES: 'etri,experience,knda,youth'
           JOB_MONITORING_RECIPIENTS: 'jeew0n.lee.217@gmail.com'
