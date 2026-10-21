@@ -2,6 +2,11 @@ name: Career Newsletter Service
 
 on:
   workflow_dispatch:
+    inputs:
+      check_only:
+        description: 'Read-only weekly source connection check (no email or database writes)'
+        type: boolean
+        default: false
   schedule:
     # 매일 11:00 KST (02:00 UTC) 실행
     - cron: '0 2 * * *'
@@ -9,6 +14,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     steps:
       - name: Checkout Repository
@@ -34,6 +40,7 @@ jobs:
           SUPABASE_ANON_KEY: test-key
 
       - name: Run Monitor Service
+        if: ${{ inputs.check_only != true }}
         run: node monitor_v2.js
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -45,3 +52,7 @@ jobs:
           JOB_MONITORING_ENABLED: 'true'
           JOB_MONITORING_SOURCES: 'etri,experience,knda,youth'
           JOB_MONITORING_RECIPIENTS: 'jeew0n.lee.217@gmail.com'
+
+      - name: Check weekly public sources without sending email
+        if: ${{ inputs.check_only == true }}
+        run: node tests/manual/check_weekly_sources.js

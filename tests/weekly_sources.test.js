@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { parseExperience, parseYouthOpen, parseKnda, collectSource } = require('../lib/weekly_sources');
+const { parseExperience, parseYouthOpen, parseKnda, collectSource, requestWithRetry } = require('../lib/weekly_sources');
 
 test('experience separates durable identity from the clickable search URL', () => {
     const html = `<div class="card"><a title="새 인턴 공고" href="javascript:fn_searchDetail('I','PG123');"></a><strong>모집기간</strong><span>26-10-01 ~ 26-10-19</span></div></li>`;
@@ -26,5 +26,30 @@ test('K-newdeal treats new cycles sharing a URL as different postings', () => {
 });
 
 test('collector fails on request errors instead of claiming no new postings', async () => {
-    await assert.rejects(collectSource('knda', async () => ({ ok: false, status: 503 })), /503/);
+    await assert.rejects(collectSource('knda', async () => ({ ok: false, status: 503 }), { delayMs: 0 }), /503/);
+});
+
+test('transient connection errors retry and return the successful body', async () => {
+    let calls = 0;
+    const body = await requestWithRetry('https://example.com', async () => {
+        if (++calls < 3) throw new Error('connect timeout');
+        return { ok: true, text: async () => 'recovered' };
+    }, { delayMs: 0 });
+    assert.equal(body, 'recovered');
+    assert.equal(calls, 3);
+});
+
+test('body failures are retried and permanent HTTP failures are not', async () => {
+    let calls = 0;
+    await assert.rejects(requestWithRetry('https://example.com', async () => {
+        calls++;
+        return { ok: true, text: async () => { throw new Error('body timeout'); } };
+    }, { attempts: 2, delayMs: 0 }), /body timeout/);
+    assert.equal(calls, 2);
+    calls = 0;
+    await assert.rejects(requestWithRetry('https://example.com', async () => {
+        calls++;
+        return { ok: false, status: 404 };
+    }, { delayMs: 0 }), /404/);
+    assert.equal(calls, 1);
 });

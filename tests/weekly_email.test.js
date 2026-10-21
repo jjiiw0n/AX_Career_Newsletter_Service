@@ -41,6 +41,18 @@ test('weekly email escapes scraped content', () => {
     assert.match(html, /a=1&amp;b=2/);
 });
 
+test('failed sources are distinct from empty successful sources', () => {
+    const { html, totalNew } = generateHtml({ '일경험 인턴': [], ETRI: [
+        { title: '인턴 모집', link: 'https://example.com' }
+    ] }, '이지원', { '일경험 인턴': 'connection timeout' });
+    assert.equal(totalNew, 1);
+    assert.match(html, /수집 실패 · 확인 필요/);
+    assert.match(html, /확인하지 못했습니다/);
+    assert.match(html, /인턴 모집/);
+    assert.doesNotMatch(html, /이번 주 새롭게 등록된 공고가 없습니다/);
+    assert.doesNotMatch(html, /connection timeout/);
+});
+
 test('weekly email uses a simple coral newsletter layout without pill badges', () => {
     const { html } = generateHtml({
         '긴 이름의 기업 교육 및 일경험 프로그램': [{
