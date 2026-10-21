@@ -1,0 +1,30 @@
+name: Store local experience snapshot
+on:
+  workflow_dispatch:
+    inputs:
+      snapshot:
+        description: 'Gzip/base64 public experience listings collected locally (no credentials)'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: local-experience-cache
+  cancel-in-progress: false
+jobs:
+  store:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Store and verify private snapshot (no email)
+        run: node scripts/store_experience_snapshot.js
+        env:
+          EXPERIENCE_SNAPSHOT: ${{ inputs.snapshot }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
