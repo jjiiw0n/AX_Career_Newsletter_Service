@@ -7,13 +7,17 @@ on:
         description: 'Read-only weekly source connection check (no email or database writes)'
         type: boolean
         default: false
+      check_windows:
+        description: 'Use a Windows runner for the read-only connection check'
+        type: boolean
+        default: false
   schedule:
     # 매일 11:00 KST (02:00 UTC) 실행
     - cron: '0 2 * * *'
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.check_only == true && inputs.check_windows == true && 'windows-latest' || 'ubuntu-latest' }}
     timeout-minutes: 25
 
     steps:
@@ -31,6 +35,7 @@ jobs:
         run: npm ci
 
       - name: Install Playwright Chromium
+        if: ${{ inputs.check_only != true }}
         run: npx playwright install --with-deps chromium
 
       - name: Test service
