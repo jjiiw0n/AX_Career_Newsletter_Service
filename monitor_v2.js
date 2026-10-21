@@ -4,6 +4,7 @@ const { chromium } = require('playwright');
 const nodemailer = require('nodemailer');
 const supabase = require('./lib/supabase');
 const { SOURCES: WEEKLY_SOURCES, collectSource } = require('./lib/weekly_sources');
+const { loadSnapshot } = require('./lib/experience_cache');
 
 // --- Helpers & Parsers ---
 // ... (existing helper functions: normalizeLink, parseEtri, parseBtp, parseYouth)
@@ -762,7 +763,8 @@ async function monitor() {
         for (const source of ['youth', 'experience', 'knda']) {
             if (!enabledJobSources.has(source)) continue;
             try {
-                dataCache[source] = await collectSource(source);
+                dataCache[source] = source === 'experience' && process.env.EXPERIENCE_SOURCE_MODE === 'local-cache'
+                    ? await loadSnapshot(supabase) : await collectSource(source);
                 console.log(`Weekly source ${source}: ${dataCache[source].length} postings collected`);
             } catch (error) {
                 sourceErrors[source] = error.message;

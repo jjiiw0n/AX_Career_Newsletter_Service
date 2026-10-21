@@ -7,6 +7,11 @@ async function main() {
             ? 'https://www.krivet.re.kr/kor/knda/homeKndaSelectList.do?pageIndex=1&recordCountPerPage=10'
             : config.url;
         try {
+            if (source === 'experience' && process.env.EXPERIENCE_SOURCE_MODE === 'local-cache') {
+                const posts = await require('../../lib/experience_cache').loadSnapshot(require('../../lib/supabase'));
+                console.log(`PASS experience (private local cache): ${posts.length}`);
+                return;
+            }
             const raw = await requestWithRetry(url, requestPublicPage);
             let count;
             if (source === 'experience') {

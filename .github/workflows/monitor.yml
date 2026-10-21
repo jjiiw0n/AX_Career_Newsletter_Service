@@ -57,7 +57,12 @@ jobs:
           JOB_MONITORING_ENABLED: 'true'
           JOB_MONITORING_SOURCES: 'etri,experience,knda,youth'
           JOB_MONITORING_RECIPIENTS: 'jeew0n.lee.217@gmail.com'
+          EXPERIENCE_SOURCE_MODE: 'local-cache'
 
       - name: Check weekly public sources without sending email
         if: ${{ inputs.check_only == true }}
         run: node tests/manual/check_weekly_sources.js
+        env:
+          EXPERIENCE_SOURCE_MODE: 'local-cache'
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
