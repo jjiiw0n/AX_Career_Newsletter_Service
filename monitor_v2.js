@@ -539,14 +539,14 @@ async function ensureWeeklySites(subscriber, sources) {
     }
 }
 
-function generateHtml(userResults, userName) {
+function generateHtml(userResults, userName, sourceErrors = {}) {
     const siteEntries = Object.entries(userResults);
     const totalNew = siteEntries.reduce((sum, [, posts]) => sum + posts.length, 0);
     const safeUserName = escapeHtml(userName);
     const siteSummary = siteEntries
         .map(([siteName, posts]) => `
             <div style="margin:0 0 6px; color:#765f57; font-size:14px; line-height:1.7; word-break:keep-all; overflow-wrap:anywhere;">
-                ${escapeHtml(siteName)} · ${posts.length > 0 ? `신규 ${posts.length}건` : '확인 완료'}
+                ${escapeHtml(siteName)} · ${sourceErrors[siteName] ? '수집 실패 · 확인 필요' : posts.length > 0 ? `신규 ${posts.length}건` : '확인 완료'}
             </div>
         `)
         .join('');
@@ -560,6 +560,7 @@ function generateHtml(userResults, userName) {
           <p style="margin:10px 0 0; color:#765f57; font-size:14px; line-height:1.7;">
             이번 주에는 관심 사이트 ${siteEntries.length}곳을 확인했고, 신규 공고는 <strong style="color:#f36f61;">${totalNew}건</strong>입니다.
             선택하지 않은 사이트의 공고는 포함하지 않았습니다.
+            ${Object.keys(sourceErrors).length ? '<br>일부 사이트의 수집에 실패했습니다. 아래 실패 항목은 신규 공고가 없다는 뜻이 아닙니다.' : ''}
           </p>
         </div>
         <div style="margin-top:24px; padding:15px; background:#f8f9fa; border-left:5px solid #f36f61;">
@@ -571,7 +572,8 @@ function generateHtml(userResults, userName) {
 
     siteEntries.forEach(([siteName, posts]) => {
         const hasNew = posts.length > 0;
-        const statusText = hasNew ? `신규 ${posts.length}건` : '신규 공고 없음';
+        const failed = Boolean(sourceErrors[siteName]);
+        const statusText = failed ? '수집 실패 · 확인 필요' : hasNew ? `신규 ${posts.length}건` : '신규 공고 없음';
 
         html += `
         <div style="margin-top:24px;">
@@ -582,7 +584,9 @@ function generateHtml(userResults, userName) {
           <div>
         `;
 
-        if (posts.length === 0) {
+        if (failed) {
+            html += `<p style="margin:0; padding:18px 0; color:#c65348; font-size:14px; line-height:1.7;">사이트 연결 또는 수집 중 오류가 발생해 이번 주 공고를 확인하지 못했습니다. 다음 정기 실행에서 다시 확인합니다.</p>`;
+        } else if (posts.length === 0) {
             html += `<p style="margin:0; padding:18px 0; color:#8b756d; font-size:13px; line-height:1.6;">이번 주 새롭게 등록된 공고가 없습니다. 다음 주에도 계속 확인할게요.</p>`;
         } else {
             posts.forEach(post => {
@@ -611,13 +615,15 @@ function generateHtml(userResults, userName) {
     return { html, totalNew };
 }
 
-async function sendEmail(to, userName, userResults) {
+async function sendEmail(to, userName, userResults, sourceErrors = {}) {
     if (Object.keys(userResults).length === 0) {
         throw new Error(`No monitoring sites are connected to ${to}; refusing to send an empty job email.`);
     }
-    const { html, totalNew } = generateHtml(userResults, userName);
+    const { html, totalNew } = generateHtml(userResults, userName, sourceErrors);
     const monitoredSiteCount = Object.keys(userResults).length;
-    const subject = totalNew > 0
+    const subject = Object.keys(sourceErrors).length > 0
+        ? `[주간 공고] ${userName}님, 신규 공고 ${totalNew}건이 있으며 일부 수집처는 확인하지 못했습니다.`
+        : totalNew > 0
         ? `[주간 공고] ${userName}님, 선택한 ${monitoredSiteCount}곳에서 신규 공고 ${totalNew}건이 있습니다.`
         : `[주간 공고] 이번 주 신규 공고가 없습니다`;
 
@@ -693,8 +699,10 @@ async function monitor() {
     }
     let dataCache = {};
     let htmlCache = {};
+    const sourceErrors = {};
     const browser = await chromium.launch({ headless: true });
     const context = await browser.newContext();
+    try {
 
     // 2. The industry newsletter is collected and sent every day.
     try {
@@ -752,9 +760,16 @@ async function monitor() {
 
         // A failed collection must not become a misleading "no new postings" email.
         for (const source of ['youth', 'experience', 'knda']) {
-            if (enabledJobSources.has(source)) dataCache[source] = await collectSource(source);
+            if (!enabledJobSources.has(source)) continue;
+            try {
+                dataCache[source] = await collectSource(source);
+                console.log(`Weekly source ${source}: ${dataCache[source].length} postings collected`);
+            } catch (error) {
+                sourceErrors[source] = error.message;
+                console.error(`Weekly source ${source} failed: ${error.message}`);
+            }
         }
-        if (enabledJobSources.has('etri') && !htmlCache.etri) throw new Error('ETRI collection failed');
+        if (enabledJobSources.has('etri') && !htmlCache.etri) sourceErrors.etri = 'ETRI collection failed';
 
         // --- Dynamic/Evaluate Sites ---
         // Scrape Lig
@@ -839,8 +854,14 @@ async function monitor() {
         for (const subscriber of jobSubscribers) {
             console.log(`Processing weekly jobs for: ${subscriber.email}`);
             const userResults = {};
+            const userErrors = {};
 
             for (const site of subscriber.monitoring_sites) {
+                if (sourceErrors[getJobSource(site.url)]) {
+                    userResults[site.site_name] = [];
+                    userErrors[site.site_name] = sourceErrors[getJobSource(site.url)];
+                    continue;
+                }
                 let posts = [];
                 if (site.url.includes('etri.re.kr') && htmlCache.etri) {
                     posts = parseEtri(htmlCache.etri);
@@ -875,7 +896,7 @@ async function monitor() {
             }
 
             try {
-                await sendEmail(subscriber.email, subscriber.user_name || '회원', userResults);
+                await sendEmail(subscriber.email, subscriber.user_name || '회원', userResults, userErrors);
 
                 // Mark posts as sent only after SMTP succeeds.
                 for (const site of subscriber.monitoring_sites) {
@@ -895,9 +916,12 @@ async function monitor() {
         }
     }
 
-    await context.close();
-    await browser.close();
     console.log('Monitor run completed.');
+    if (Object.keys(sourceErrors).length) process.exitCode = 1;
+    } finally {
+        await context.close().catch(error => console.error('Context cleanup failed:', error.message));
+        await browser.close();
+    }
 }
 
 if (require.main === module) {

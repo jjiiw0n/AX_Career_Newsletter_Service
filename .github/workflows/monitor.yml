@@ -2,13 +2,23 @@ name: Career Newsletter Service
 
 on:
   workflow_dispatch:
+    inputs:
+      check_only:
+        description: 'Read-only weekly source connection check (no email or database writes)'
+        type: boolean
+        default: false
+      check_windows:
+        description: 'Use a Windows runner for the read-only connection check'
+        type: boolean
+        default: false
   schedule:
     # 매일 11:00 KST (02:00 UTC) 실행
     - cron: '0 2 * * *'
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.check_only == true && inputs.check_windows == true && 'windows-latest' || 'ubuntu-latest' }}
+    timeout-minutes: 25
 
     steps:
       - name: Checkout Repository
@@ -25,6 +35,7 @@ jobs:
         run: npm ci
 
       - name: Install Playwright Chromium
+        if: ${{ inputs.check_only != true }}
         run: npx playwright install --with-deps chromium
 
       - name: Test service
@@ -34,6 +45,7 @@ jobs:
           SUPABASE_ANON_KEY: test-key
 
       - name: Run Monitor Service
+        if: ${{ inputs.check_only != true }}
         run: node monitor_v2.js
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -45,3 +57,7 @@ jobs:
           JOB_MONITORING_ENABLED: 'true'
           JOB_MONITORING_SOURCES: 'etri,experience,knda,youth'
           JOB_MONITORING_RECIPIENTS: 'jeew0n.lee.217@gmail.com'
+
+      - name: Check weekly public sources without sending email
+        if: ${{ inputs.check_only == true }}
+        run: node tests/manual/check_weekly_sources.js
