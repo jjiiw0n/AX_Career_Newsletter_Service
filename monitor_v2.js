@@ -5,6 +5,7 @@ const nodemailer = require('nodemailer');
 const supabase = require('./lib/supabase');
 const { SOURCES: WEEKLY_SOURCES, collectSource } = require('./lib/weekly_sources');
 const { loadSnapshot } = require('./lib/experience_cache');
+const { scrapeShipbuilding, sameShipEvent } = require('./lib/shipbuilding_news');
 
 // --- Helpers & Parsers ---
 // ... (existing helper functions: normalizeLink, parseEtri, parseBtp, parseYouth)
@@ -42,7 +43,7 @@ function selectDongAScienceArticles(candidates, limit = 3) {
 
 async function scrapeNews(context) {
     console.log('Starting Newsletter Scraping...');
-    const results = { science: [], ai: [], defense: [], knowledge: [] };
+    const results = { science: [], ai: [], defense: [], knowledge: [], shipbuilding: [] };
     const priorityKeywords = {
         science: [],
         ai: [],
@@ -101,6 +102,9 @@ async function scrapeNews(context) {
         console.error('Solution News knowledge scrape failed:', e.message);
     }
 
+    const shipping = await scrapeShipbuilding(context);
+    results.shipbuilding = shipping.articles;
+    console.log(`Shipbuilding collection: ${JSON.stringify(shipping.status)}; eligible=${shipping.articles.length}`);
     const totalArticles = Object.values(results).reduce((sum, articles) => sum + articles.length, 0);
     if (totalArticles === 0) {
         throw new Error('All newsletter sources returned zero articles; refusing to send an empty newsletter.');
@@ -128,7 +132,8 @@ function excludeRecentlySentArticles(newsData, sentRows, limit = 3) {
     const sentLinks = new Set(sentRows.map(row => normalizeArticleLink(row.article_link)).filter(Boolean));
     const sentTitles = new Set(sentRows.map(row => normalizeArticleTitle(row.article_title)).filter(Boolean));
 
-    return Object.fromEntries(Object.entries(newsData).map(([source, articles]) => {
+    const result = {};
+    for (const [source, articles] of Object.entries(newsData)) {
         const selected = [];
         const seenLinks = new Set();
         const seenTitles = new Set();
@@ -136,13 +141,16 @@ function excludeRecentlySentArticles(newsData, sentRows, limit = 3) {
             const link = normalizeArticleLink(article.link);
             const title = normalizeArticleTitle(article.title);
             if (!link || !title || sentLinks.has(link) || sentTitles.has(title) || seenLinks.has(link) || seenTitles.has(title)) continue;
+            if (source === 'shipbuilding' && [...sentRows.map(row => row.article_title), ...Object.values(result).flat().map(a => a.title), ...selected.map(a => a.title)]
+                .some(other => sameShipEvent(article.title, other))) continue;
             seenLinks.add(link);
             seenTitles.add(title);
             selected.push({ ...article, link });
             if (selected.length === limit) break;
         }
-        return [source, selected];
-    }));
+        result[source] = selected;
+    }
+    return result;
 }
 
 function selectLatestDeliveryRows(rows) {
@@ -157,7 +165,7 @@ function selectLatestDeliveryRows(rows) {
 async function filterRecentlySentNewsletter(newsData) {
     const { data, error } = await supabase.from('newsletter_history')
         .select('article_title, article_link, delivery_id, sent_at')
-        .in('source', ['science', 'ai', 'defense', 'knowledge'])
+        .in('source', ['science', 'ai', 'defense', 'knowledge', 'shipbuilding'])
         .order('sent_at', { ascending: false })
         .limit(100);
     if (error) throw new Error(`Failed to load newsletter history: ${error.message}`);
@@ -314,7 +322,8 @@ async function sendNewsletter(to, userName, newsData, insight, blogPosts = [], o
         { key: 'science', name: '과학' },
         { key: 'ai', name: 'AI/네트워크' },
         { key: 'defense', name: '방산/국방' },
-        { key: 'knowledge', name: '지식' }
+        { key: 'knowledge', name: '지식' },
+        { key: 'shipbuilding', name: '조선·해양' }
     ];
 
     categories.forEach(cat => {
@@ -322,8 +331,8 @@ async function sendNewsletter(to, userName, newsData, insight, blogPosts = [], o
         if (articles.length === 0) return;
         newsletterHtml += `<hr style="border: 0; border-top: 1px solid #ddd; margin: 30px 0;">`;
         newsletterHtml += `<h3 style="color: #2c3e50; margin-top: 0;">📌 오늘의 ${cat.name} 주요 뉴스</h3><ul style="list-style: none; padding: 0;">`;
-        articles.forEach((art, i) => {
-            newsletterHtml += `<li style="margin-top: 10px;"><a href="${art.link}" style="text-decoration: none; color: #333;"><strong>${i+1}. ${art.title}</strong></a></li>`;
+        articles.slice(0, 3).forEach((art, i) => {
+            newsletterHtml += `<li style="margin-top: 10px; word-break:keep-all; overflow-wrap:anywhere;"><a href="${escapeNewsletterHtml(art.link)}" style="text-decoration: none; color: #333;"><strong>${i+1}. ${escapeNewsletterHtml(art.title)}</strong></a></li>`;
         });
         newsletterHtml += `</ul>`;
     });
@@ -722,7 +731,7 @@ async function monitor() {
         } catch (youtubeError) {
             console.error('YouTube scrape failed:', youtubeError.message);
         }
-        const insight = '오늘의 과학·AI·방산 분야 주요 소식을 전해드립니다.';
+        const insight = '오늘의 과학·AI·방산·지식·조선 분야 주요 소식을 전해드립니다.';
         if (articleCount === 0 && blogPosts.length === 0 && youtubeVideos.length === 0) {
             console.log('No unsent newsletter articles, blog posts, or YouTube videos found. Skipping daily newsletter.');
         } else {
