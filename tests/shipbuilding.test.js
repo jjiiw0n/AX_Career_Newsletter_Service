@@ -11,9 +11,19 @@ test('shipbuilding excludes stale, login-only, stock and community publicity art
     const posts = rankShipbuilding([
         article('HD현대 LNG선 수주'), article('삼성중공업 목표주가 상향'), article('HD현대 지역 축제 개최'),
         article('한화오션 기술 공개', { publicBody: false }),
-        article('삼성중공업 선박 인도', { publishedAt: new Date(now - 73 * 3600000).toISOString() })
+        article('삼성중공업 선박 인도', { publishedAt: new Date(now - 169 * 3600000).toISOString() })
     ], now);
     assert.deepEqual(posts.map(p => p.title), ['HD현대 LNG선 수주']);
+});
+
+test('shipbuilding accepts 78-hour-old articles and the seven-day boundary, but not older articles', () => {
+    const posts = rankShipbuilding([
+        article('HD현대 미국 조선소 설립', { publishedAt: new Date(now - 78 * 3600000).toISOString() }),
+        article('한화오션 친환경선박 인증', { publishedAt: new Date(now - 168 * 3600000).toISOString() }),
+        article('삼성중공업 LNG선 수주', { publishedAt: new Date(now - 168 * 3600000 - 1).toISOString() })
+    ], now);
+    assert.equal(posts.length, 2);
+    assert.equal(posts[0].title, 'HD현대 미국 조선소 설립');
 });
 
 test('confirmed material shipbuilding events rank ahead of incidental sector news', () => {
