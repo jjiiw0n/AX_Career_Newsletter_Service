@@ -7,6 +7,17 @@ const now = Date.parse('2026-10-25T03:00:00Z');
 const article = (title, extra = {}) => ({ title, link: 'https://example.com/' + encodeURIComponent(title),
     publicBody: true, publishedAt: new Date(now - 3600000).toISOString(), evidence: '건조 계약을 체결했다고 밝혔다.', ...extra });
 
+test('expanded defense publishers feed only marine stories into shipbuilding', () => {
+    const posts = rankShipbuilding([
+        article('K9 자주포 도입 가능성', { source: '더구루', evidence: '한화오션도 언급됐다.' }),
+        article('부품국산화 요격드론 개발', { source: '국방일보', evidence: '조선 산업도 관련된다.' }),
+        article('해군순항훈련전단 미국 입항', { source: '국방일보' }),
+        article('한화 미국 함정 사업 협력', { source: '더구루' }),
+        article('HD현대중공업 임단협 타결', { source: '아시아투데이' })
+    ], now);
+    assert.deepEqual(new Set(posts.map(p => p.title)), new Set(['한화 미국 함정 사업 협력', 'HD현대중공업 임단협 타결']));
+});
+
 test('shipbuilding excludes stale, login-only, stock and community publicity articles', () => {
     const posts = rankShipbuilding([
         article('HD현대 LNG선 수주'), article('삼성중공업 목표주가 상향'), article('HD현대 지역 축제 개최'),
