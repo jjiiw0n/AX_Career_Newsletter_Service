@@ -21,7 +21,8 @@ on:
 
 jobs:
   build:
-    runs-on: ${{ inputs.check_only == true && inputs.check_windows == true && 'windows-latest' || 'ubuntu-latest' }}
+    # Pin the OS: the installed Playwright version does not support Ubuntu 26 yet.
+    runs-on: ${{ inputs.check_only == true && inputs.check_windows == true && 'windows-latest' || 'ubuntu-24.04' }}
     timeout-minutes: 25
 
     steps:
