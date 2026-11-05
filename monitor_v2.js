@@ -128,12 +128,19 @@ function normalizeArticleLink(link) {
     }
 }
 
-function excludeRecentlySentArticles(newsData, sentRows, limit = 3) {
-    const sentLinks = new Set(sentRows.map(row => normalizeArticleLink(row.article_link)).filter(Boolean));
-    const sentTitles = new Set(sentRows.map(row => normalizeArticleTitle(row.article_title)).filter(Boolean));
+function shipEventStage(title = '') {
+    if (/협상|검토|추진|가능성|예정|우선협상|양해각서|MOU/i.test(title)) return 'preliminary';
+    if (/계약\s*(?:체결|확정)|수주\s*(?:확정|성공)|본계약/.test(title)) return 'confirmed';
+    return '';
+}
+
+function excludeRecentlySentArticles(newsData, sentRows, limit = 3, recentShipRows = []) {
 
     const result = {};
     for (const [source, articles] of Object.entries(newsData)) {
+        const history = source === 'shipbuilding' ? [...sentRows, ...recentShipRows] : sentRows;
+        const sentLinks = new Set(history.map(row => normalizeArticleLink(row.article_link)).filter(Boolean));
+        const sentTitles = new Set(history.map(row => normalizeArticleTitle(row.article_title)).filter(Boolean));
         const selected = [];
         const seenLinks = new Set();
         const seenTitles = new Set();
@@ -141,8 +148,9 @@ function excludeRecentlySentArticles(newsData, sentRows, limit = 3) {
             const link = normalizeArticleLink(article.link);
             const title = normalizeArticleTitle(article.title);
             if (!link || !title || sentLinks.has(link) || sentTitles.has(title) || seenLinks.has(link) || seenTitles.has(title)) continue;
-            if (source === 'shipbuilding' && [...sentRows.map(row => row.article_title), ...Object.values(result).flat().map(a => a.title), ...selected.map(a => a.title)]
-                .some(other => sameShipEvent(article.title, other))) continue;
+            if (source === 'shipbuilding' && [...history.map(row => row.article_title), ...Object.values(result).flat().map(a => a.title), ...selected.map(a => a.title)]
+                .some(other => sameShipEvent(article.title, other) &&
+                    !(shipEventStage(article.title) === 'confirmed' && shipEventStage(other) === 'preliminary'))) continue;
             seenLinks.add(link);
             seenTitles.add(title);
             selected.push({ ...article, link });
@@ -169,7 +177,20 @@ async function filterRecentlySentNewsletter(newsData) {
         .order('sent_at', { ascending: false })
         .limit(100);
     if (error) throw new Error(`Failed to load newsletter history: ${error.message}`);
-    return excludeRecentlySentArticles(newsData, selectLatestDeliveryRows(data || []));
+    let recentShipRows = [];
+    if (newsData.shipbuilding?.length) {
+        const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+        const recent = await supabase.from('newsletter_history')
+            .select('article_title, article_link')
+            .eq('source', 'shipbuilding')
+            .gte('sent_at', cutoff);
+        if (recent.error) {
+            console.error('Failed to load seven-day shipbuilding history:', recent.error.message);
+            return excludeRecentlySentArticles({ ...newsData, shipbuilding: [] }, selectLatestDeliveryRows(data || []));
+        }
+        recentShipRows = recent.data || [];
+    }
+    return excludeRecentlySentArticles(newsData, selectLatestDeliveryRows(data || []), 3, recentShipRows);
 }
 
 async function saveNewsletterHistory(newsData) {
