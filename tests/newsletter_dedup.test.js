@@ -1,5 +1,23 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+
+test('only shipbuilding checks older history and allows a materially confirmed follow-up', () => {
+    const old = 'HD현대 미국 스마트 조선소 합작법인 설립 계약 협상';
+    const followup = 'HD현대 미국 스마트 조선소 합작법인 설립 계약 체결';
+    const result = excludeRecentlySentArticles({
+        science: [{ title: '예전 과학 기사', link: 'https://example.com/science' }],
+        shipbuilding: [
+            { title: old, link: 'https://example.com/old' },
+            { title: old + ' 진행', link: 'https://example.com/reprint' },
+            { title: followup, link: 'https://example.com/confirmed' }
+        ]
+    }, [], 3, [
+        { article_title: old, article_link: 'https://example.com/old' },
+        { article_title: '예전 과학 기사', article_link: 'https://example.com/science' }
+    ]);
+    assert.deepEqual(result.shipbuilding.map(article => article.title), [followup]);
+    assert.equal(result.science.length, 1);
+});
 const {
     normalizeArticleLink,
     normalizeArticleTitle,
