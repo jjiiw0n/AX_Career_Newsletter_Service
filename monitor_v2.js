@@ -604,6 +604,7 @@ function generateHtml(userResults, userName, sourceErrors = {}) {
                   <div style="padding:16px 0; border-bottom:1px solid #f0e5e0;">
                     <a href="${escapeHtml(post.link)}" style="display:block; color:#333; font-size:16px; font-weight:700; line-height:1.7; word-break:keep-all; overflow-wrap:anywhere; text-decoration:none;">${escapeHtml(post.title)}</a>
                     <p style="margin:7px 0 0; color:#8b756d; font-size:14px; line-height:1.7;">${escapeHtml(post.date || post.period || '일정 확인 필요')}</p>
+                    ${post.engineeringDuties?.length ? `<p style="margin:7px 0 0; color:#765f57; font-size:14px; line-height:1.7;">공학 관련 업무: ${post.engineeringDuties.map(escapeHtml).join(' · ')}</p>` : ''}
                     <a href="${escapeHtml(post.link)}" style="display:block; margin-top:5px; color:#c65348; font-size:14px; font-weight:700; text-decoration:none;">공고 보기 →</a>
                   </div>`;
             });
@@ -773,7 +774,8 @@ async function monitor() {
             if (!enabledJobSources.has(source)) continue;
             try {
                 dataCache[source] = source === 'experience' && process.env.EXPERIENCE_SOURCE_MODE === 'local-cache'
-                    ? await loadSnapshot(supabase) : await collectSource(source);
+                    ? (await loadSnapshot(supabase)).filter(post => Array.isArray(post.engineeringDuties) && post.engineeringDuties.length > 0)
+                    : await collectSource(source, undefined, { engineeringOnly: true });
                 console.log(`Weekly source ${source}: ${dataCache[source].length} postings collected`);
             } catch (error) {
                 sourceErrors[source] = error.message;

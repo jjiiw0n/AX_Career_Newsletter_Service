@@ -15,7 +15,7 @@ function log(message) {
 }
 async function main() {
     log('Starting public experience collection');
-    const posts = await collectSource('experience');
+    const posts = await collectSource('experience', undefined, { engineeringOnly: true });
     const snapshot = { version: 1, source: 'experience', collectedAt: new Date().toISOString(), posts };
     validateSnapshot(snapshot);
     const payload = gzipSync(JSON.stringify(snapshot)).toString('base64');

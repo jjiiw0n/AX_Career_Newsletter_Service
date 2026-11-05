@@ -15,6 +15,10 @@ on:
         description: 'Read-only shipbuilding collection check (no email or history writes)'
         type: boolean
         default: false
+      check_engineering:
+        description: 'Read-only youth internship engineering filter check (no email or database writes)'
+        type: boolean
+        default: false
   schedule:
     # 매일 11:00 KST (02:00 UTC) 실행
     - cron: '0 2 * * *'
@@ -40,7 +44,7 @@ jobs:
         run: npm ci
 
       - name: Install Playwright Chromium
-        if: ${{ inputs.check_only != true || inputs.check_shipbuilding == true }}
+        if: ${{ (inputs.check_only != true && inputs.check_engineering != true) || inputs.check_shipbuilding == true }}
         run: npx playwright install --with-deps chromium
 
       - name: Test service
@@ -49,8 +53,21 @@ jobs:
           SUPABASE_URL: https://example.supabase.co
           SUPABASE_ANON_KEY: test-key
 
+      - name: Install job attachment reader
+        if: ${{ inputs.check_engineering == true || (inputs.check_only != true && inputs.check_shipbuilding != true) }}
+        shell: bash
+        env:
+          CHECK_ENGINEERING: ${{ inputs.check_engineering }}
+        run: |
+          if [[ "$CHECK_ENGINEERING" == "true" || "$(TZ=Asia/Seoul date +%u)" == "1" ]]; then
+            python3 -m pip install --disable-pip-version-check --target "$RUNNER_TEMP/job-pdf" pypdf==6.10.0 || {
+              echo '::warning::PDF reader unavailable; unverified internship attachments will be skipped.'
+              [[ "$CHECK_ENGINEERING" != "true" ]]
+            }
+          fi
+
       - name: Run Monitor Service
-        if: ${{ inputs.check_only != true && inputs.check_shipbuilding != true }}
+        if: ${{ inputs.check_only != true && inputs.check_shipbuilding != true && inputs.check_engineering != true }}
         run: node monitor_v2.js
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -63,6 +80,7 @@ jobs:
           JOB_MONITORING_SOURCES: 'etri,experience,knda,youth'
           JOB_MONITORING_RECIPIENTS: 'jeew0n.lee.217@gmail.com'
           EXPERIENCE_SOURCE_MODE: 'local-cache'
+          PYTHONPATH: ${{ runner.temp }}/job-pdf
 
       - name: Check weekly public sources without sending email
         if: ${{ inputs.check_only == true }}
@@ -75,3 +93,9 @@ jobs:
       - name: Check public shipbuilding news without sending email
         if: ${{ inputs.check_shipbuilding == true }}
         run: node scripts/check_shipbuilding.js
+
+      - name: Check youth engineering classification without sending email
+        if: ${{ inputs.check_engineering == true }}
+        run: node scripts/check_engineering_jobs.js youth
+        env:
+          PYTHONPATH: ${{ runner.temp }}/job-pdf
